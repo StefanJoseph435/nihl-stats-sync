@@ -1,0 +1,9 @@
+{
+  "name": "nihl-stats-sync",
+  "version": "1.0.0",
+  "description": "Sync NIHL stats from WordPress to Webflow",
+  "main": "simple-sync.js",
+  "scripts": {
+    "start": "node simple-sync.js"
+  }
+}
