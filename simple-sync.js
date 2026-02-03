@@ -84,9 +84,7 @@ function parseTable(html) {
     }
     
     // We need at least 10 cells for a valid team row
-    // Expected: Position, Team, Played, Wins, OTW, OTL, Losses, GF, GA, Points
     if (cells.length >= 10) {
-      // Check if first cell is a number (position)
       const position = parseInt(cells[0]);
       if (!isNaN(position) && position > 0 && position <= 20) {
         teams.push({
@@ -94,11 +92,11 @@ function parseTable(html) {
           position: position,
           played: parseInt(cells[2]) || 0,
           wins: parseInt(cells[3]) || 0,
-          'ot-wins': parseInt(cells[4]) || 0,
-          'ot-losses': parseInt(cells[5]) || 0,
+          otWins: parseInt(cells[4]) || 0,
+          otLosses: parseInt(cells[5]) || 0,
           losses: parseInt(cells[6]) || 0,
-          'goals-for': parseInt(cells[7]) || 0,
-          'goals-against': parseInt(cells[8]) || 0,
+          goalsFor: parseInt(cells[7]) || 0,
+          goalsAgainst: parseInt(cells[8]) || 0,
           points: parseInt(cells[9]) || 0
         });
       }
@@ -106,6 +104,22 @@ function parseTable(html) {
   }
   
   return teams;
+}
+
+// Get collection schema to find correct field slugs
+async function getCollectionSchema() {
+  const options = {
+    hostname: 'api.webflow.com',
+    path: `/v2/collections/${CONFIG.webflowCollectionId}`,
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${CONFIG.webflowApiToken}`,
+      'accept': 'application/json'
+    }
+  };
+  
+  const response = await httpsRequest(options);
+  return response.data;
 }
 
 // Get existing items from Webflow
@@ -124,8 +138,41 @@ async function getExistingItems() {
   return response.data.items || [];
 }
 
+// Build field mapping from collection schema
+function buildFieldMap(schema) {
+  const fieldMap = {};
+  const fields = schema.fields || [];
+  
+  console.log('📋 Available fields in collection:');
+  
+  for (const field of fields) {
+    const slug = field.slug;
+    const displayName = field.displayName || field.name || slug;
+    console.log(`   - ${displayName} → slug: "${slug}"`);
+    
+    // Map our internal names to Webflow slugs
+    const lowerName = displayName.toLowerCase().replace(/\s+/g, '');
+    
+    if (lowerName === 'position') fieldMap.position = slug;
+    if (lowerName === 'played') fieldMap.played = slug;
+    if (lowerName === 'wins') fieldMap.wins = slug;
+    if (lowerName === 'otwins') fieldMap.otWins = slug;
+    if (lowerName === 'otlosses') fieldMap.otLosses = slug;
+    if (lowerName === 'losses') fieldMap.losses = slug;
+    if (lowerName === 'goalsfor') fieldMap.goalsFor = slug;
+    if (lowerName === 'goalsagainst') fieldMap.goalsAgainst = slug;
+    if (lowerName === 'points') fieldMap.points = slug;
+  }
+  
+  console.log('\n📌 Field mapping:');
+  console.log(JSON.stringify(fieldMap, null, 2));
+  console.log('');
+  
+  return fieldMap;
+}
+
 // Create a new item in Webflow
-async function createItem(team) {
+async function createItem(team, fieldMap) {
   const options = {
     hostname: 'api.webflow.com',
     path: `/v2/collections/${CONFIG.webflowCollectionId}/items`,
@@ -137,27 +184,29 @@ async function createItem(team) {
     }
   };
   
-  const body = JSON.stringify({
-    fieldData: {
-      name: team.name,
-      slug: team.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, ''),
-      position: team.position,
-      played: team.played,
-      wins: team.wins,
-      'ot-wins': team['ot-wins'],
-      'ot-losses': team['ot-losses'],
-      losses: team.losses,
-      'goals-for': team['goals-for'],
-      'goals-against': team['goals-against'],
-      points: team.points
-    }
-  });
+  const fieldData = {
+    name: team.name,
+    slug: team.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '')
+  };
+  
+  // Map our data to the actual Webflow field slugs
+  if (fieldMap.position) fieldData[fieldMap.position] = team.position;
+  if (fieldMap.played) fieldData[fieldMap.played] = team.played;
+  if (fieldMap.wins) fieldData[fieldMap.wins] = team.wins;
+  if (fieldMap.otWins) fieldData[fieldMap.otWins] = team.otWins;
+  if (fieldMap.otLosses) fieldData[fieldMap.otLosses] = team.otLosses;
+  if (fieldMap.losses) fieldData[fieldMap.losses] = team.losses;
+  if (fieldMap.goalsFor) fieldData[fieldMap.goalsFor] = team.goalsFor;
+  if (fieldMap.goalsAgainst) fieldData[fieldMap.goalsAgainst] = team.goalsAgainst;
+  if (fieldMap.points) fieldData[fieldMap.points] = team.points;
+  
+  const body = JSON.stringify({ fieldData });
   
   return httpsRequest(options, body);
 }
 
 // Update an existing item in Webflow
-async function updateItem(itemId, team) {
+async function updateItem(itemId, team, fieldMap) {
   const options = {
     hostname: 'api.webflow.com',
     path: `/v2/collections/${CONFIG.webflowCollectionId}/items/${itemId}`,
@@ -169,26 +218,26 @@ async function updateItem(itemId, team) {
     }
   };
   
-  const body = JSON.stringify({
-    fieldData: {
-      position: team.position,
-      played: team.played,
-      wins: team.wins,
-      'ot-wins': team['ot-wins'],
-      'ot-losses': team['ot-losses'],
-      losses: team.losses,
-      'goals-for': team['goals-for'],
-      'goals-against': team['goals-against'],
-      points: team.points
-    }
-  });
+  const fieldData = {};
+  
+  // Map our data to the actual Webflow field slugs
+  if (fieldMap.position) fieldData[fieldMap.position] = team.position;
+  if (fieldMap.played) fieldData[fieldMap.played] = team.played;
+  if (fieldMap.wins) fieldData[fieldMap.wins] = team.wins;
+  if (fieldMap.otWins) fieldData[fieldMap.otWins] = team.otWins;
+  if (fieldMap.otLosses) fieldData[fieldMap.otLosses] = team.otLosses;
+  if (fieldMap.losses) fieldData[fieldMap.losses] = team.losses;
+  if (fieldMap.goalsFor) fieldData[fieldMap.goalsFor] = team.goalsFor;
+  if (fieldMap.goalsAgainst) fieldData[fieldMap.goalsAgainst] = team.goalsAgainst;
+  if (fieldMap.points) fieldData[fieldMap.points] = team.points;
+  
+  const body = JSON.stringify({ fieldData });
   
   return httpsRequest(options, body);
 }
 
 // Publish all items
 async function publishItems() {
-  // Get all items first
   const items = await getExistingItems();
   const itemIds = items.map(item => item.id);
   
@@ -225,12 +274,17 @@ async function sync() {
   }
   
   try {
-    // Step 1: Fetch WordPress page
+    // Step 1: Get collection schema to find field slugs
+    console.log('🔧 Fetching collection schema...');
+    const schema = await getCollectionSchema();
+    const fieldMap = buildFieldMap(schema);
+    
+    // Step 2: Fetch WordPress page
     console.log('📥 Fetching WordPress page...');
     const html = await fetchHTML(CONFIG.wordpressUrl);
     console.log(`   ✓ Fetched ${html.length} characters\n`);
     
-    // Step 2: Parse the FIRST table only
+    // Step 3: Parse the FIRST table only
     console.log('🔍 Parsing first table data...');
     const teams = parseTable(html);
     console.log(`   ✓ Found ${teams.length} teams in Wilkinson table\n`);
@@ -245,7 +299,7 @@ async function sync() {
     teams.forEach(t => console.log(`   ${t.position}. ${t.name} - ${t.points} pts`));
     console.log('');
     
-    // Step 3: Get existing Webflow items
+    // Step 4: Get existing Webflow items
     console.log('📊 Fetching existing Webflow items...');
     const existingItems = await getExistingItems();
     console.log(`   ✓ Found ${existingItems.length} existing items\n`);
@@ -258,7 +312,7 @@ async function sync() {
       }
     });
     
-    // Step 4: Sync each team
+    // Step 5: Sync each team
     console.log('🔄 Syncing teams to Webflow...');
     let created = 0;
     let updated = 0;
@@ -268,7 +322,7 @@ async function sync() {
       
       if (existingId) {
         // Update existing
-        const result = await updateItem(existingId, team);
+        const result = await updateItem(existingId, team, fieldMap);
         if (result.status >= 200 && result.status < 300) {
           console.log(`   ✓ Updated: ${team.name}`);
           updated++;
@@ -277,7 +331,7 @@ async function sync() {
         }
       } else {
         // Create new
-        const result = await createItem(team);
+        const result = await createItem(team, fieldMap);
         if (result.status >= 200 && result.status < 300) {
           console.log(`   ✓ Created: ${team.name}`);
           created++;
@@ -292,7 +346,7 @@ async function sync() {
     
     console.log(`\n📈 Summary: ${created} created, ${updated} updated\n`);
     
-    // Step 5: Publish changes
+    // Step 6: Publish changes
     console.log('📤 Publishing changes...');
     const publishResult = await publishItems();
     if (publishResult && publishResult.status >= 200 && publishResult.status < 300) {
