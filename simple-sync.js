@@ -1,6 +1,7 @@
 /**
  * WordPress to Webflow CMS Sync Script
  * Zero external dependencies - uses only Node.js built-in modules
+ * Only syncs the FIRST table (Wilkinson table)
  */
 
 const https = require('https');
@@ -45,13 +46,23 @@ function fetchHTML(url) {
   });
 }
 
-// Parse the HTML table to extract team data
+// Parse ONLY THE FIRST TABLE to extract team data
 function parseTable(html) {
   const teams = [];
   
-  // Find table rows - look for <tr> tags with team data
+  // Find ONLY the first table
+  const tableMatch = html.match(/<table[^>]*>[\s\S]*?<\/table>/i);
+  if (!tableMatch) {
+    console.log('No table found on page');
+    return teams;
+  }
+  
+  const firstTable = tableMatch[0];
+  console.log('   ✓ Found first table (Wilkinson table)\n');
+  
+  // Find table rows within the first table only
   const rowRegex = /<tr[^>]*>[\s\S]*?<\/tr>/gi;
-  const rows = html.match(rowRegex) || [];
+  const rows = firstTable.match(rowRegex) || [];
   
   for (const row of rows) {
     // Skip header rows
@@ -204,6 +215,7 @@ async function publishItems() {
 // Main sync function
 async function sync() {
   console.log('🚀 Starting WordPress to Webflow sync...\n');
+  console.log('📌 Only syncing the FIRST table (Wilkinson table)\n');
   
   // Validate config
   if (!CONFIG.webflowApiToken || !CONFIG.webflowCollectionId) {
@@ -218,10 +230,10 @@ async function sync() {
     const html = await fetchHTML(CONFIG.wordpressUrl);
     console.log(`   ✓ Fetched ${html.length} characters\n`);
     
-    // Step 2: Parse the table
-    console.log('🔍 Parsing table data...');
+    // Step 2: Parse the FIRST table only
+    console.log('🔍 Parsing first table data...');
     const teams = parseTable(html);
-    console.log(`   ✓ Found ${teams.length} teams\n`);
+    console.log(`   ✓ Found ${teams.length} teams in Wilkinson table\n`);
     
     if (teams.length === 0) {
       console.error('❌ No teams found in the table!');
