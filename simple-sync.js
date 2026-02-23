@@ -91,21 +91,21 @@ function parseTable(html) {
       cells.push(content);
     }
 
-    // We need at least 10 cells for a valid team row
-    if (cells.length >= 10) {
-      const position = parseInt(cells[0]);
+    // We need at least 11 cells for a valid team row (first cell is blank)
+    if (cells.length >= 11) {
+      const position = parseInt(cells[1]);
       if (!isNaN(position) && position > 0 && position <= 20) {
         teams.push({
-          name: cells[1],
+          name: cells[2],
           position: position,
-          played:       parseInt(cells[2]) || 0,
-          wins:         parseInt(cells[3]) || 0,
-          otWins:       parseInt(cells[4]) || 0,
-          otLosses:     parseInt(cells[5]) || 0,
-          losses:       parseInt(cells[6]) || 0,
-          goalsFor:     parseInt(cells[7]) || 0,
-          goalsAgainst: parseInt(cells[8]) || 0,
-          points:       parseInt(cells[9]) || 0
+          played:       parseInt(cells[3]) || 0,
+          wins:         parseInt(cells[4]) || 0,
+          otWins:       parseInt(cells[5]) || 0,
+          otLosses:     parseInt(cells[6]) || 0,
+          losses:       parseInt(cells[7]) || 0,
+          goalsFor:     parseInt(cells[8]) || 0,
+          goalsAgainst: parseInt(cells[9]) || 0,
+          points:       parseInt(cells[10]) || 0
         });
       }
     }
