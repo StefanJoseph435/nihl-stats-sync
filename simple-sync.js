@@ -50,27 +50,35 @@ function fetchHTML(url) {
 function parseTable(html) {
   const teams = [];
 
-  // Find the position of "WILKINSON TABLE" text, then grab the NEXT table after it
+  // Find the position of "WILKINSON TABLE" text
   const markerIndex = html.search(/WILKINSON TABLE/i);
   if (markerIndex === -1) {
     console.log('Could not find "WILKINSON TABLE" marker on page');
     return teams;
   }
 
+  console.log(`   ✓ Found WILKINSON TABLE marker at index ${markerIndex}`);
   const htmlAfterMarker = html.slice(markerIndex);
 
-  const tableMatch = htmlAfterMarker.match(/<table[^>]*>[\s\S]*?<\/table>/i);
+  // Greedy match to capture the full table including all nested content
+  const tableMatch = htmlAfterMarker.match(/<table[\s\S]*?<\/table>/i);
   if (!tableMatch) {
     console.log('No table found after WILKINSON TABLE marker');
     return teams;
   }
 
   const firstTable = tableMatch[0];
-  console.log('   ✓ Found Wilkinson table (by marker)\n');
+  console.log(`   ✓ Found table (${firstTable.length} chars)\n`);
 
-  // Find table rows within the target table
-  const rowRegex = /<tr[^>]*>[\s\S]*?<\/tr>/gi;
+  // Find all rows
+  const rowRegex = /<tr[\s\S]*?<\/tr>/gi;
   const rows = firstTable.match(rowRegex) || [];
+  console.log(`   ✓ Found ${rows.length} rows in table`);
+
+  // Log first 3 rows so we can see the structure
+  rows.slice(0, 3).forEach((row, i) => {
+    console.log(`   Row ${i} preview: ${row.substring(0, 200).replace(/\n/g, ' ')}`);
+  });
 
   for (const row of rows) {
     // Skip header rows
@@ -82,7 +90,6 @@ function parseTable(html) {
     let match;
 
     while ((match = cellRegex.exec(row)) !== null) {
-      // Clean up the cell content - remove HTML tags and trim
       let content = match[1]
         .replace(/<[^>]*>/g, '')
         .replace(/&nbsp;/g, ' ')
@@ -91,23 +98,40 @@ function parseTable(html) {
       cells.push(content);
     }
 
-    // We need at least 11 cells for a valid team row (first cell is blank)
-    if (cells.length >= 11) {
-      const position = parseInt(cells[1]);
-      if (!isNaN(position) && position > 0 && position <= 20) {
-        teams.push({
-          name: cells[2],
-          position: position,
-          played:       parseInt(cells[3]) || 0,
-          wins:         parseInt(cells[4]) || 0,
-          otWins:       parseInt(cells[5]) || 0,
-          otLosses:     parseInt(cells[6]) || 0,
-          losses:       parseInt(cells[7]) || 0,
-          goalsFor:     parseInt(cells[8]) || 0,
-          goalsAgainst: parseInt(cells[9]) || 0,
-          points:       parseInt(cells[10]) || 0
-        });
+    if (cells.length === 0) continue;
+
+    // Debug: log every row's cells
+    console.log(`   Cells (${cells.length}): ${JSON.stringify(cells.slice(0, 6))}`);
+
+    // Dynamically find which cell contains the position number (1-20)
+    // handles blank first cell or no blank first cell
+    let positionIndex = -1;
+    for (let i = 0; i < Math.min(cells.length, 3); i++) {
+      const val = parseInt(cells[i]);
+      if (!isNaN(val) && val > 0 && val <= 20) {
+        positionIndex = i;
+        break;
       }
+    }
+
+    if (positionIndex === -1) continue;
+
+    const nameIndex = positionIndex + 1;
+    const dataStart = positionIndex + 2;
+
+    if (cells.length >= dataStart + 8) {
+      teams.push({
+        name:         cells[nameIndex],
+        position:     parseInt(cells[positionIndex]),
+        played:       parseInt(cells[dataStart])     || 0,
+        wins:         parseInt(cells[dataStart + 1]) || 0,
+        otWins:       parseInt(cells[dataStart + 2]) || 0,
+        otLosses:     parseInt(cells[dataStart + 3]) || 0,
+        losses:       parseInt(cells[dataStart + 4]) || 0,
+        goalsFor:     parseInt(cells[dataStart + 5]) || 0,
+        goalsAgainst: parseInt(cells[dataStart + 6]) || 0,
+        points:       parseInt(cells[dataStart + 7]) || 0
+      });
     }
   }
 
@@ -158,18 +182,17 @@ function buildFieldMap(schema) {
     const displayName = field.displayName || field.name || slug;
     console.log(`   - ${displayName} → slug: "${slug}"`);
 
-    // Map our internal names to Webflow slugs
     const lowerName = displayName.toLowerCase().replace(/\s+/g, '');
 
-    if (lowerName === 'position') fieldMap.position = slug;
-    if (lowerName === 'played')   fieldMap.played = slug;
-    if (lowerName === 'wins')     fieldMap.wins = slug;
-    if (lowerName === 'otwins')   fieldMap.otWins = slug;
-    if (lowerName === 'otlosses') fieldMap.otLosses = slug;
-    if (lowerName === 'losses')   fieldMap.losses = slug;
-    if (lowerName === 'goalsfor') fieldMap.goalsFor = slug;
+    if (lowerName === 'position')     fieldMap.position     = slug;
+    if (lowerName === 'played')       fieldMap.played       = slug;
+    if (lowerName === 'wins')         fieldMap.wins         = slug;
+    if (lowerName === 'otwins')       fieldMap.otWins       = slug;
+    if (lowerName === 'otlosses')     fieldMap.otLosses     = slug;
+    if (lowerName === 'losses')       fieldMap.losses       = slug;
+    if (lowerName === 'goalsfor')     fieldMap.goalsFor     = slug;
     if (lowerName === 'goalsagainst') fieldMap.goalsAgainst = slug;
-    if (lowerName === 'points')   fieldMap.points = slug;
+    if (lowerName === 'points')       fieldMap.points       = slug;
   }
 
   console.log('\n📌 Field mapping:');
@@ -197,7 +220,6 @@ async function createItem(team, fieldMap) {
     slug: team.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '')
   };
 
-  // Map our data to the actual Webflow field slugs
   if (fieldMap.position)     fieldData[fieldMap.position]     = team.position;
   if (fieldMap.played)       fieldData[fieldMap.played]       = team.played;
   if (fieldMap.wins)         fieldData[fieldMap.wins]         = team.wins;
@@ -209,7 +231,6 @@ async function createItem(team, fieldMap) {
   if (fieldMap.points)       fieldData[fieldMap.points]       = team.points;
 
   const body = JSON.stringify({ fieldData });
-
   return httpsRequest(options, body);
 }
 
@@ -228,7 +249,6 @@ async function updateItem(itemId, team, fieldMap) {
 
   const fieldData = {};
 
-  // Map our data to the actual Webflow field slugs
   if (fieldMap.position)     fieldData[fieldMap.position]     = team.position;
   if (fieldMap.played)       fieldData[fieldMap.played]       = team.played;
   if (fieldMap.wins)         fieldData[fieldMap.wins]         = team.wins;
@@ -240,7 +260,6 @@ async function updateItem(itemId, team, fieldMap) {
   if (fieldMap.points)       fieldData[fieldMap.points]       = team.points;
 
   const body = JSON.stringify({ fieldData });
-
   return httpsRequest(options, body);
 }
 
@@ -272,9 +291,8 @@ async function publishItems() {
 // Main sync function
 async function sync() {
   console.log('🚀 Starting WordPress to Webflow sync...\n');
-  console.log('📌 Only syncing the FIRST table (Wilkinson table)\n');
+  console.log('📌 Syncing Wilkinson table\n');
 
-  // Validate config
   if (!CONFIG.webflowApiToken || !CONFIG.webflowCollectionId) {
     console.error('❌ Missing required environment variables!');
     console.error('   Make sure WEBFLOW_API_TOKEN and WEBFLOW_COLLECTION_ID are set.');
@@ -282,7 +300,7 @@ async function sync() {
   }
 
   try {
-    // Step 1: Get collection schema to find field slugs
+    // Step 1: Get collection schema
     console.log('🔧 Fetching collection schema...');
     const schema = await getCollectionSchema();
     const fieldMap = buildFieldMap(schema);
@@ -292,7 +310,7 @@ async function sync() {
     const html = await fetchHTML(CONFIG.wordpressUrl);
     console.log(`   ✓ Fetched ${html.length} characters\n`);
 
-    // Step 3: Parse the table after the WILKINSON TABLE marker
+    // Step 3: Parse the Wilkinson table
     console.log('🔍 Parsing Wilkinson table data...');
     const teams = parseTable(html);
     console.log(`   ✓ Found ${teams.length} teams in Wilkinson table\n`);
@@ -302,7 +320,6 @@ async function sync() {
       process.exit(1);
     }
 
-    // Log found teams
     console.log('📋 Teams found:');
     teams.forEach(t => console.log(`   ${t.position}. ${t.name} - ${t.points} pts`));
     console.log('');
@@ -312,7 +329,6 @@ async function sync() {
     const existingItems = await getExistingItems();
     console.log(`   ✓ Found ${existingItems.length} existing items\n`);
 
-    // Create a map of existing items by name
     const existingMap = new Map();
     existingItems.forEach(item => {
       if (item.fieldData && item.fieldData.name) {
@@ -329,7 +345,6 @@ async function sync() {
       const existingId = existingMap.get(team.name);
 
       if (existingId) {
-        // Update existing
         const result = await updateItem(existingId, team, fieldMap);
         if (result.status >= 200 && result.status < 300) {
           console.log(`   ✓ Updated: ${team.name}`);
@@ -338,7 +353,6 @@ async function sync() {
           console.log(`   ⚠ Failed to update ${team.name}: ${JSON.stringify(result.data)}`);
         }
       } else {
-        // Create new
         const result = await createItem(team, fieldMap);
         if (result.status >= 200 && result.status < 300) {
           console.log(`   ✓ Created: ${team.name}`);
@@ -348,7 +362,6 @@ async function sync() {
         }
       }
 
-      // Small delay to avoid rate limiting
       await new Promise(resolve => setTimeout(resolve, 200));
     }
 
