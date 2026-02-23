@@ -1,7 +1,9 @@
 /**
  * WordPress to Webflow CMS Sync Script
  * Zero external dependencies - uses only Node.js built-in modules
- * Targets the table immediately following the "WILKINSON TABLE" heading
+ * Automatically identifies the correct standings table by matching:
+ *   1. Team names against Webflow CMS
+ *   2. Column structure (numeric stats, not fixture scores)
  */
 
 const https = require('https');
@@ -46,65 +48,41 @@ function fetchHTML(url) {
   });
 }
 
-// Parse the table immediately after the "WILKINSON TABLE" marker
-function parseTable(html) {
+// Clean HTML content from a cell
+function cleanCell(content) {
+  return content
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .trim();
+}
+
+// Check whether a cell value looks like a standings stat (plain number)
+// rather than a fixture result ("3-1", "TBC", "x", date like "14/2" etc.)
+function isStatCell(value) {
+  return /^\d+$/.test(value);
+}
+
+// Parse a single table into team rows, returning null if structure looks wrong
+function parseTeamsFromTable(tableHtml) {
   const teams = [];
-
-  // Find the position of "WILKINSON TABLE" text
-  const markerIndex = html.search(/WILKINSON TABLE/i);
-  if (markerIndex === -1) {
-    console.log('Could not find "WILKINSON TABLE" marker on page');
-    return teams;
-  }
-
-  console.log(`   ✓ Found WILKINSON TABLE marker at index ${markerIndex}`);
-  const htmlAfterMarker = html.slice(markerIndex);
-
-  // Greedy match to capture the full table including all nested content
-  const tableMatch = htmlAfterMarker.match(/<table[\s\S]*?<\/table>/i);
-  if (!tableMatch) {
-    console.log('No table found after WILKINSON TABLE marker');
-    return teams;
-  }
-
-  const firstTable = tableMatch[0];
-  console.log(`   ✓ Found table (${firstTable.length} chars)\n`);
-
-  // Find all rows
   const rowRegex = /<tr[\s\S]*?<\/tr>/gi;
-  const rows = firstTable.match(rowRegex) || [];
-  console.log(`   ✓ Found ${rows.length} rows in table`);
-
-  // Log first 3 rows so we can see the structure
-  rows.slice(0, 3).forEach((row, i) => {
-    console.log(`   Row ${i} preview: ${row.substring(0, 200).replace(/\n/g, ' ')}`);
-  });
+  const rows = tableHtml.match(rowRegex) || [];
 
   for (const row of rows) {
-    // Skip header rows
     if (row.includes('<th')) continue;
 
-    // Extract all cell contents
     const cellRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
     const cells = [];
     let match;
 
     while ((match = cellRegex.exec(row)) !== null) {
-      let content = match[1]
-        .replace(/<[^>]*>/g, '')
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&amp;/g, '&')
-        .trim();
-      cells.push(content);
+      cells.push(cleanCell(match[1]));
     }
 
     if (cells.length === 0) continue;
 
-    // Debug: log every row's cells
-    console.log(`   Cells (${cells.length}): ${JSON.stringify(cells.slice(0, 6))}`);
-
-    // Dynamically find which cell contains the position number (1-20)
-    // handles blank first cell or no blank first cell
+    // Find position number dynamically (scan first 3 cells)
     let positionIndex = -1;
     for (let i = 0; i < Math.min(cells.length, 3); i++) {
       const val = parseInt(cells[i]);
@@ -119,23 +97,70 @@ function parseTable(html) {
     const nameIndex = positionIndex + 1;
     const dataStart = positionIndex + 2;
 
-    if (cells.length >= dataStart + 8) {
-      teams.push({
-        name:         cells[nameIndex],
-        position:     parseInt(cells[positionIndex]),
-        played:       parseInt(cells[dataStart])     || 0,
-        wins:         parseInt(cells[dataStart + 1]) || 0,
-        otWins:       parseInt(cells[dataStart + 2]) || 0,
-        otLosses:     parseInt(cells[dataStart + 3]) || 0,
-        losses:       parseInt(cells[dataStart + 4]) || 0,
-        goalsFor:     parseInt(cells[dataStart + 5]) || 0,
-        goalsAgainst: parseInt(cells[dataStart + 6]) || 0,
-        points:       parseInt(cells[dataStart + 7]) || 0
-      });
-    }
+    // Need at least 8 stat columns after the name
+    if (cells.length < dataStart + 8) continue;
+    if (!cells[nameIndex]) continue;
+
+    // Check that the stat columns all look like plain numbers
+    // If any look like "3-1", "TBC", "x", "14/2" etc. this is a fixture grid - skip it
+    const statCells = cells.slice(dataStart, dataStart + 8);
+    const allStats = statCells.every(c => isStatCell(c));
+    if (!allStats) continue;
+
+    teams.push({
+      name:         cells[nameIndex],
+      position:     parseInt(cells[positionIndex]),
+      played:       parseInt(cells[dataStart])     || 0,
+      wins:         parseInt(cells[dataStart + 1]) || 0,
+      otWins:       parseInt(cells[dataStart + 2]) || 0,
+      otLosses:     parseInt(cells[dataStart + 3]) || 0,
+      losses:       parseInt(cells[dataStart + 4]) || 0,
+      goalsFor:     parseInt(cells[dataStart + 5]) || 0,
+      goalsAgainst: parseInt(cells[dataStart + 6]) || 0,
+      points:       parseInt(cells[dataStart + 7]) || 0
+    });
   }
 
   return teams;
+}
+
+// Extract all tables from the page HTML
+function extractAllTables(html) {
+  const tables = [];
+  const tableRegex = /<table[\s\S]*?<\/table>/gi;
+  let match;
+  while ((match = tableRegex.exec(html)) !== null) {
+    tables.push(match[0]);
+  }
+  return tables;
+}
+
+// Find the table that best matches Webflow team names AND has the right data structure
+function findBestMatchingTable(tables, webflowTeamNames) {
+  const knownNames = new Set(webflowTeamNames.map(n => n.toLowerCase().trim()));
+  let bestTeams = null;
+  let bestScore = 0;
+  let bestIndex = -1;
+
+  tables.forEach((tableHtml, index) => {
+    const teams = parseTeamsFromTable(tableHtml);
+
+    if (teams.length === 0) {
+      console.log(`   Table ${index + 1}: skipped (no valid standings rows)`);
+      return;
+    }
+
+    const matches = teams.filter(t => knownNames.has(t.name.toLowerCase().trim())).length;
+    console.log(`   Table ${index + 1}: ${teams.length} standings rows, ${matches}/${knownNames.size} team names matched`);
+
+    if (matches > bestScore) {
+      bestScore = matches;
+      bestTeams = teams;
+      bestIndex = index + 1;
+    }
+  });
+
+  return { teams: bestTeams, score: bestScore, tableNumber: bestIndex };
 }
 
 // Get collection schema to find correct field slugs
@@ -291,7 +316,6 @@ async function publishItems() {
 // Main sync function
 async function sync() {
   console.log('🚀 Starting WordPress to Webflow sync...\n');
-  console.log('📌 Syncing Wilkinson table\n');
 
   if (!CONFIG.webflowApiToken || !CONFIG.webflowCollectionId) {
     console.error('❌ Missing required environment variables!');
@@ -305,30 +329,47 @@ async function sync() {
     const schema = await getCollectionSchema();
     const fieldMap = buildFieldMap(schema);
 
-    // Step 2: Fetch WordPress page
-    console.log('📥 Fetching WordPress page...');
-    const html = await fetchHTML(CONFIG.wordpressUrl);
-    console.log(`   ✓ Fetched ${html.length} characters\n`);
-
-    // Step 3: Parse the Wilkinson table
-    console.log('🔍 Parsing Wilkinson table data...');
-    const teams = parseTable(html);
-    console.log(`   ✓ Found ${teams.length} teams in Wilkinson table\n`);
-
-    if (teams.length === 0) {
-      console.error('❌ No teams found in the table!');
-      process.exit(1);
-    }
-
-    console.log('📋 Teams found:');
-    teams.forEach(t => console.log(`   ${t.position}. ${t.name} - ${t.points} pts`));
-    console.log('');
-
-    // Step 4: Get existing Webflow items
+    // Step 2: Get existing Webflow items (to use team names for matching)
     console.log('📊 Fetching existing Webflow items...');
     const existingItems = await getExistingItems();
     console.log(`   ✓ Found ${existingItems.length} existing items\n`);
 
+    const webflowTeamNames = existingItems
+      .map(item => item.fieldData && item.fieldData.name)
+      .filter(Boolean);
+
+    if (webflowTeamNames.length === 0) {
+      console.error('❌ No team names found in Webflow collection — cannot match tables!');
+      process.exit(1);
+    }
+
+    console.log(`   ✓ Webflow teams to match against: ${webflowTeamNames.join(', ')}\n`);
+
+    // Step 3: Fetch WordPress page
+    console.log('📥 Fetching WordPress page...');
+    const html = await fetchHTML(CONFIG.wordpressUrl);
+    console.log(`   ✓ Fetched ${html.length} characters\n`);
+
+    // Step 4: Extract all tables and find the best match
+    console.log('🔍 Scanning all tables on page...');
+    const tables = extractAllTables(html);
+    console.log(`   ✓ Found ${tables.length} tables total\n`);
+
+    const { teams, score, tableNumber } = findBestMatchingTable(tables, webflowTeamNames);
+
+    console.log('');
+
+    if (!teams || score === 0) {
+      console.error('❌ Could not find a table matching the Webflow team names!');
+      process.exit(1);
+    }
+
+    console.log(`✅ Best match: Table ${tableNumber} with ${score} team name matches\n`);
+    console.log('📋 Teams found:');
+    teams.forEach(t => console.log(`   ${t.position}. ${t.name} - ${t.points} pts`));
+    console.log('');
+
+    // Step 5: Build existing items map and sync
     const existingMap = new Map();
     existingItems.forEach(item => {
       if (item.fieldData && item.fieldData.name) {
@@ -336,7 +377,6 @@ async function sync() {
       }
     });
 
-    // Step 5: Sync each team
     console.log('🔄 Syncing teams to Webflow...');
     let created = 0;
     let updated = 0;
